@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlowAgent Memory</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero card">
+        <div>
+          <p class="eyebrow">Separate Memory Window</p>
+          <h1>Memory & Saved Workflows</h1>
+          <p id="hero-copy" class="subcopy">Inspect what the agent remembers across sessions without crowding the chat UI.</p>
+        </div>
+        <span id="memory-status" class="status-pill">Loading</span>
+      </header>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>User Memory</h2>
+            <p class="section-note">Preferences and notes reused during planning.</p>
+          </div>
+        </div>
+        <div id="user-memory" class="list-grid"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Saved Workflows</h2>
+            <p class="section-note">Reusable plans captured from approved chats.</p>
+          </div>
+        </div>
+        <div id="saved-workflows" class="list-grid"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Domain Memory</h2>
+            <p class="section-note">Selectors and notes remembered per hostname.</p>
+          </div>
+        </div>
+        <div id="domain-memory" class="list-grid"></div>
+      </section>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

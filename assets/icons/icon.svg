@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="FlowAgent icon">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e1823c" />
+      <stop offset="100%" stop-color="#a63f16" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)" />
+  <path d="M28 42c0-8.837 7.163-16 16-16h40c8.837 0 16 7.163 16 16v24c0 8.837-7.163 16-16 16H63l-17 18v-18H44c-8.837 0-16-7.163-16-16V42Z" fill="#fff7ef"/>
+  <path d="M50 52h28M50 64h18" stroke="#b55422" stroke-linecap="round" stroke-width="8"/>
+</svg>

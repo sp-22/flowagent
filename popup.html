@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlowAgent</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="masthead card">
+        <div>
+          <p class="eyebrow">Agent Workspace</p>
+          <h1>FlowAgent</h1>
+          <p class="subcopy">Plan browser tasks in chat, approve risky steps, and run them from the sidepanel with your own model key.</p>
+        </div>
+        <div class="status-cluster">
+          <span id="provider-status" class="status-pill">Provider unavailable</span>
+          <span id="run-status" class="status-pill muted">Idle</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Launch</h2>
+            <p class="section-copy">Open the sidepanel to chat, inspect plans, and run workflows.</p>
+          </div>
+        </div>
+        <div class="action-grid">
+          <button id="open-workspace" class="primary">Open Agent Workspace</button>
+          <button id="open-options" class="ghost">API Settings</button>
+        </div>
+        <p id="workspace-note" class="section-copy">The sidepanel is the primary surface now.</p>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Recent Workflows</h2>
+            <p class="section-copy">Load a saved flow directly into the sidepanel.</p>
+          </div>
+        </div>
+        <div id="workflow-list" class="workflow-list"></div>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,123 @@
+:root {
+  --bg: #f5f0e8;
+  --panel: rgba(255, 252, 248, 0.95);
+  --panel-strong: #fffdfa;
+  --ink: #221914;
+  --muted: #6d584a;
+  --accent: #b2552b;
+  --border: rgba(67, 45, 31, 0.12);
+  --shadow: 0 20px 46px rgba(58, 35, 18, 0.1);
+  --display-font: "Iowan Old Style", "Palatino Linotype", serif;
+  --body-font: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(213, 145, 92, 0.14), transparent 28%),
+    linear-gradient(180deg, #faf6ef 0%, #ece1d0 100%);
+  color: var(--ink);
+  font-family: var(--body-font);
+}
+
+.shell {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 16px 40px;
+  display: grid;
+  gap: 14px;
+}
+
+.card {
+  padding: 18px;
+  border-radius: 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.eyebrow,
+.section-note {
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-family: var(--display-font);
+  font-weight: 700;
+}
+
+h1 {
+  font-size: 34px;
+}
+
+h2 {
+  font-size: 24px;
+}
+
+.subcopy {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.section-head {
+  margin-bottom: 14px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(178, 85, 43, 0.1);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.list-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-card {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(67, 45, 31, 0.1);
+  background: var(--panel-strong);
+}
+
+.memory-card strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.memory-card p,
+.memory-card li {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.memory-card ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
