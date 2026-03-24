@@ -132,12 +132,17 @@ export const INTERNAL_ACTIONS = {
 
 export const AGENT_STORAGE_KEYS = {
   CHAT_THREAD: "agentChatThread",
+  COPILOT_THREAD: "agentCopilotThread",
+  COPILOT_HISTORY: "agentCopilotHistory",
+  COPILOT_STATE: "agentCopilotState",
   DRAFT_PLAN: "agentDraftPlan",
   CURRENT_RUN: "agentCurrentRun",
   SAVED_WORKFLOWS: "agentSavedWorkflows",
+  STARTER_WORKFLOWS_SEEDED: "agentStarterWorkflowsSeeded",
   SESSION_MEMORY: "agentSessionMemory",
   USER_MEMORY: "agentUserMemory",
-  DOMAIN_MEMORY: "agentDomainMemory"
+  DOMAIN_MEMORY: "agentDomainMemory",
+  UI_STATE: "agentUiState"
 };
 
 export const CHAT_MESSAGE_TYPES = {
@@ -149,6 +154,11 @@ export const CHAT_MESSAGE_TYPES = {
   STEP_RESULT: "step_result",
   ERROR_EVENT: "error_event",
   FINAL_RESULT: "final_result"
+};
+
+export const AGENT_TABS = {
+  WORKFLOWS: "workflows",
+  COPILOT: "copilot"
 };
 
 export const WORKFLOW_STEP_KINDS = [
@@ -197,7 +207,10 @@ export const FAILURE_MODES = {
 };
 
 export const DEFAULT_AGENT_RUN_STATE = {
+  runId: null,
   planId: null,
+  sourceWorkflowId: null,
+  sourceWorkflowTitle: "",
   status: AGENT_RUN_STATUS.IDLE,
   currentStepIndex: 0,
   awaitingApprovalStepId: null,
@@ -218,7 +231,9 @@ export const DEFAULT_AGENT_RUN_STATE = {
 
 export const DEFAULT_SESSION_MEMORY = {
   currentPlanId: null,
+  currentRunId: null,
   runs: {},
+  history: [],
   recentFacts: []
 };
 
@@ -227,6 +242,16 @@ export const DEFAULT_USER_MEMORY = {
   defaults: {},
   notes: [],
   updatedAt: null
+};
+
+export const DEFAULT_COPILOT_STATE = {
+  activeConversationId: null
+};
+
+export const DEFAULT_AGENT_UI_STATE = {
+  selectedTab: AGENT_TABS.WORKFLOWS,
+  selectedWorkflowId: null,
+  saveWorkflowDraft: null
 };
 
 export const STARTER_PROMPTS = [

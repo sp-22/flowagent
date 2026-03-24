@@ -5,9 +5,12 @@ import { AGENT_RUN_STATUS } from "../src/shared/constants.js";
 import { AgentEngine } from "../src/background/agent-engine.js";
 import {
   getCurrentRun,
+  getDraftPlan,
+  getSavedWorkflows,
   initializeAgentStorage,
   replaceCurrentRun,
-  saveDraftPlan
+  saveDraftPlan,
+  upsertSavedWorkflow
 } from "../src/background/agent-storage.js";
 import { initializeStorage } from "../src/background/storage.js";
 import { createChromeStub } from "../test-support/chrome-stub.js";
@@ -194,4 +197,53 @@ test("executeWithRecovery pauses the run after retry and repair failure", async 
   const run = await getCurrentRun();
   assert.equal(run.status, AGENT_RUN_STATUS.PAUSED_FOR_ERROR);
   assert.equal(run.awaitingApprovalStepId, "step-fail");
+});
+
+test("runSavedWorkflow injects template inputs and updates saved workflow metadata", async () => {
+  const engine = new AgentEngine();
+  engine.scheduleProcess = () => {};
+
+  await upsertSavedWorkflow({
+    id: "workflow-1",
+    title: "Template flow",
+    goal: "Open a start page",
+    summary: "Reusable template",
+    steps: [
+      {
+        id: "step-1",
+        kind: "open_url",
+        label: "Open start URL",
+        args: {
+          url: "https://example.com"
+        }
+      }
+    ],
+    templateInputs: [
+      {
+        id: "step-1:url",
+        key: "start_url",
+        label: "Start URL",
+        defaultValue: "https://example.com",
+        stepId: "step-1",
+        argKey: "url"
+      }
+    ]
+  });
+
+  await engine.runSavedWorkflow({
+    workflowId: "workflow-1",
+    inputs: {
+      start_url: "https://openai.com"
+    }
+  });
+
+  const run = await getCurrentRun();
+  const draftPlan = await getDraftPlan();
+  const savedWorkflows = await getSavedWorkflows();
+
+  assert.equal(run.status, AGENT_RUN_STATUS.RUNNING);
+  assert.equal(run.sourceWorkflowId, "workflow-1");
+  assert.equal(draftPlan.steps[0].args.url, "https://openai.com");
+  assert.equal(savedWorkflows[0].runCount, 1);
+  assert.equal(savedWorkflows[0].lastRunStatus, AGENT_RUN_STATUS.RUNNING);
 });

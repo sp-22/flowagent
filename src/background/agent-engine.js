@@ -1,4 +1,5 @@
 import {
+  AGENT_TABS,
   AGENT_RUN_STATUS,
   APPROVAL_MODES,
   CHAT_MESSAGE_TYPES,
@@ -9,12 +10,16 @@ import {
 } from "../shared/constants.js";
 import { MESSAGE_TYPES } from "../shared/messages.js";
 import {
+  applyTemplateInputsToPlan,
   buildFinalResultMessage,
   buildPlannerMemoryContext,
   buildSelectorMemoryKey,
+  createTemplateInputCandidates,
   createChatMessage,
   isDomStep,
   mergeUserMemory,
+  normalizeSavedWorkflow,
+  normalizeTemplateInputs,
   resolveTemplateVariables,
   upsertDomainSelector,
   validateWorkflowPlan
@@ -23,26 +28,39 @@ import { createId, sleep } from "../shared/utils.js";
 import { pageToolExecutor } from "../content/page-tools.js";
 import { getSettings, initializeStorage } from "./storage.js";
 import {
+  appendCopilotMessages,
+  appendSessionStepResult,
+  beginSessionRun,
   appendChatMessages,
   clearChatThread,
+  deleteCopilotConversation,
+  deleteSavedWorkflow,
   getAgentSnapshot,
+  getCopilotHistory,
+  getCopilotState,
+  getCopilotThread,
   getCurrentRun,
   getDomainMemory,
   getDraftPlan,
   getSavedWorkflows,
   getSessionMemory,
+  getUiState,
   getUserMemory,
   initializeAgentStorage,
+  loadCopilotConversation,
   replaceCurrentRun,
+  resetCopilotConversation,
   saveDomainMemory,
   saveDraftPlan,
-  saveSessionMemory,
   saveUserMemory,
   setCurrentRun,
-  updateSessionMemoryForRun,
+  syncActiveCopilotConversation,
+  updateSavedWorkflowMetadata,
+  updateSessionRun,
+  updateUiState,
   upsertSavedWorkflow
 } from "./agent-storage.js";
-import { planWorkflow, repairStep, summarizeRun } from "./llm-client.js";
+import { chatWithPage, planWorkflow, repairStep, summarizeRun } from "./llm-client.js";
 
 async function broadcastAgentSnapshot() {
   const snapshot = await getAgentSnapshot();
@@ -88,13 +106,37 @@ async function getTab(tabId) {
   }
 }
 
+function buildWorkflowMessageData({ planId = null, sourceWorkflowId = null, title = "" } = {}) {
+  return {
+    ...(planId ? { planId } : {}),
+    ...(sourceWorkflowId ? { sourceWorkflowId } : {}),
+    ...(title ? { title } : {})
+  };
+}
+
+function buildSaveWorkflowDraft(plan, templateInputs = null) {
+  const candidates = createTemplateInputCandidates(plan);
+  const nextTemplateInputs = normalizeTemplateInputs(
+    templateInputs || plan.templateInputs || [],
+    candidates
+  );
+  return {
+    workflowId: plan.id,
+    title: plan.title,
+    inputCandidates: candidates,
+    templateInputs: nextTemplateInputs,
+    updatedAt: Date.now()
+  };
+}
+
 export class AgentEngine {
   constructor(options = {}) {
     this.processing = false;
     this.hooks = {
       planWorkflowImpl: options.planWorkflowImpl || planWorkflow,
       repairStepImpl: options.repairStepImpl || repairStep,
-      summarizeRunImpl: options.summarizeRunImpl || summarizeRun
+      summarizeRunImpl: options.summarizeRunImpl || summarizeRun,
+      chatWithPageImpl: options.chatWithPageImpl || chatWithPage
     };
   }
 
@@ -115,6 +157,42 @@ export class AgentEngine {
 
   async appendChat(type, content, data = {}) {
     await appendChatMessages([createChatMessage(type, content, data)]);
+  }
+
+  async appendWorkflowChat(type, content, plan, extraData = {}) {
+    await this.appendChat(
+      type,
+      content,
+      {
+        ...buildWorkflowMessageData({
+          planId: plan?.id || null,
+          sourceWorkflowId: extraData.sourceWorkflowId || plan?.id || null,
+          title: plan?.title || extraData.title || ""
+        }),
+        ...extraData
+      }
+    );
+  }
+
+  async appendCopilotChat(type, content, data = {}) {
+    await appendCopilotMessages([createChatMessage(type, content, data)]);
+  }
+
+  async selectAgentTab(tab) {
+    await this.init();
+    await updateUiState({
+      selectedTab: tab === AGENT_TABS.COPILOT ? AGENT_TABS.COPILOT : AGENT_TABS.WORKFLOWS
+    });
+    return broadcastAgentSnapshot();
+  }
+
+  async selectWorkflow({ workflowId = null }) {
+    await this.init();
+    await updateUiState({
+      selectedTab: AGENT_TABS.WORKFLOWS,
+      selectedWorkflowId: workflowId ? String(workflowId).trim() : null
+    });
+    return broadcastAgentSnapshot();
   }
 
   async planFromChat({ goal }) {
@@ -155,6 +233,11 @@ export class AgentEngine {
           planId: null,
           error: ""
         });
+        await updateUiState({
+          selectedTab: AGENT_TABS.WORKFLOWS,
+          selectedWorkflowId: null,
+          saveWorkflowDraft: null
+        });
         await this.appendChat(CHAT_MESSAGE_TYPES.ASSISTANT_QUESTION, plannerResponse.question, {
           suggestions: plannerResponse.suggestions || []
         });
@@ -162,6 +245,11 @@ export class AgentEngine {
       }
 
       await saveDraftPlan(plannerResponse.plan);
+      await updateUiState({
+        selectedTab: AGENT_TABS.WORKFLOWS,
+        selectedWorkflowId: plannerResponse.plan.id,
+        saveWorkflowDraft: null
+      });
       await replaceCurrentRun({
         status: AGENT_RUN_STATUS.NEEDS_PLAN_APPROVAL,
         planId: plannerResponse.plan.id,
@@ -170,19 +258,16 @@ export class AgentEngine {
         error: "",
         summary: ""
       });
-      await this.appendChat(
+      await this.appendWorkflowChat(
         CHAT_MESSAGE_TYPES.ASSISTANT_PLAN,
         plannerResponse.plan.summary || `Drafted a ${plannerResponse.plan.steps.length}-step workflow.`,
-        {
-          planId: plannerResponse.plan.id,
-          title: plannerResponse.plan.title
-        }
+        plannerResponse.plan
       );
-      await this.appendChat(
+      await this.appendWorkflowChat(
         CHAT_MESSAGE_TYPES.APPROVAL_REQUEST,
         "Review the generated steps, adjust anything you want, then approve the plan before execution.",
+        plannerResponse.plan,
         {
-          planId: plannerResponse.plan.id,
           mode: "plan"
         }
       );
@@ -211,6 +296,10 @@ export class AgentEngine {
         : WORKFLOW_PLAN_STATUS.DRAFT
     };
     await saveDraftPlan(nextPlan);
+    await updateUiState({
+      selectedTab: AGENT_TABS.WORKFLOWS,
+      selectedWorkflowId: nextPlan.id
+    });
     await setCurrentRun({
       planId: nextPlan.id,
       status: nextPlan.status === WORKFLOW_PLAN_STATUS.APPROVED
@@ -218,9 +307,10 @@ export class AgentEngine {
         : AGENT_RUN_STATUS.NEEDS_PLAN_APPROVAL,
       error: ""
     });
-    await this.appendChat(
+    await this.appendWorkflowChat(
       CHAT_MESSAGE_TYPES.TOOL_EVENT,
-      "Updated the draft workflow steps."
+      "Updated the draft workflow steps.",
+      nextPlan
     );
     return broadcastAgentSnapshot();
   }
@@ -228,6 +318,10 @@ export class AgentEngine {
   async discardDraftPlan() {
     await this.init();
     await saveDraftPlan(null);
+    await updateUiState({
+      selectedWorkflowId: null,
+      saveWorkflowDraft: null
+    });
     await replaceCurrentRun({
       ...DEFAULT_AGENT_RUN_STATE,
       status: AGENT_RUN_STATUS.IDLE,
@@ -258,17 +352,78 @@ export class AgentEngine {
       status: AGENT_RUN_STATUS.IDLE,
       error: ""
     });
-    await this.appendChat(
+    await this.appendWorkflowChat(
       CHAT_MESSAGE_TYPES.TOOL_EVENT,
-      "Plan approved. Execution is still manual until you click Run."
+      "Plan approved. Execution is still manual until you click Run.",
+      approvedPlan
     );
     return broadcastAgentSnapshot();
+  }
+
+  async startWorkflowRun(plan, { sourceWorkflowId = null, sourceWorkflowTitle = "" } = {}) {
+    const runId = createId("run");
+    const startedAt = Date.now();
+
+    await replaceCurrentRun({
+      runId,
+      planId: plan.id,
+      sourceWorkflowId,
+      sourceWorkflowTitle: sourceWorkflowTitle || plan.title,
+      status: AGENT_RUN_STATUS.RUNNING,
+      currentStepIndex: 0,
+      awaitingApprovalStepId: null,
+      activeTabId: null,
+      activeUrl: "",
+      outputs: {},
+      error: "",
+      approvedStepIds: [],
+      openTabIds: [],
+      lastStepResult: null,
+      pendingResolution: null,
+      startedAt,
+      completedAt: null,
+      summary: "",
+      needsPermissionOrigins: []
+    });
+
+    await beginSessionRun({
+      runId,
+      planId: plan.id,
+      title: plan.title,
+      goal: plan.goal,
+      sourceWorkflowId
+    });
+
+    if (sourceWorkflowId) {
+      const workflows = await getSavedWorkflows();
+      const sourceWorkflow = workflows.find((workflow) => workflow.id === sourceWorkflowId);
+      if (sourceWorkflow) {
+        await updateSavedWorkflowMetadata(sourceWorkflowId, {
+          runCount: Number(sourceWorkflow.runCount || 0) + 1,
+          lastRunAt: startedAt,
+          lastRunStatus: AGENT_RUN_STATUS.RUNNING
+        });
+      }
+    }
+
+    await this.appendWorkflowChat(
+      CHAT_MESSAGE_TYPES.TOOL_EVENT,
+      `Started workflow: ${plan.title}`,
+      plan,
+      {
+        sourceWorkflowId
+      }
+    );
+    await broadcastAgentSnapshot();
+    this.scheduleProcess();
+    return getAgentSnapshot();
   }
 
   async executePlan() {
     await this.init();
     const plan = await getDraftPlan();
     const currentRun = await getCurrentRun();
+    const savedWorkflows = await getSavedWorkflows();
     if (!plan) {
       throw new Error("Create a plan before running anything.");
     }
@@ -281,54 +436,24 @@ export class AgentEngine {
         status: AGENT_RUN_STATUS.RUNNING,
         error: ""
       });
-      await this.appendChat(
+      await this.appendWorkflowChat(
         CHAT_MESSAGE_TYPES.TOOL_EVENT,
-        `Resumed workflow: ${plan.title}`
+        `Resumed workflow: ${plan.title}`,
+        plan,
+        {
+          sourceWorkflowId: currentRun.sourceWorkflowId || null
+        }
       );
       await broadcastAgentSnapshot();
       this.scheduleProcess();
       return getAgentSnapshot();
     }
 
-    await replaceCurrentRun({
-      planId: plan.id,
-      status: AGENT_RUN_STATUS.RUNNING,
-      currentStepIndex: 0,
-      awaitingApprovalStepId: null,
-      activeTabId: null,
-      activeUrl: "",
-      outputs: {},
-      error: "",
-      approvedStepIds: [],
-      openTabIds: [],
-      lastStepResult: null,
-      pendingResolution: null,
-      startedAt: Date.now(),
-      completedAt: null,
-      summary: "",
-      needsPermissionOrigins: []
+    const sourceWorkflow = savedWorkflows.find((workflow) => workflow.id === plan.id) || null;
+    return this.startWorkflowRun(plan, {
+      sourceWorkflowId: sourceWorkflow?.id || null,
+      sourceWorkflowTitle: sourceWorkflow?.title || plan.title
     });
-    const existingSessionMemory = await getSessionMemory();
-    await saveSessionMemory({
-      currentPlanId: plan.id,
-      runs: {
-        ...(existingSessionMemory.runs || {}),
-        [plan.id]: {
-          goal: plan.goal,
-          outputs: {},
-          startedAt: Date.now(),
-          stepResults: []
-        }
-      },
-      recentFacts: existingSessionMemory.recentFacts || []
-    });
-    await this.appendChat(
-      CHAT_MESSAGE_TYPES.TOOL_EVENT,
-      `Started workflow: ${plan.title}`
-    );
-    await broadcastAgentSnapshot();
-    this.scheduleProcess();
-    return getAgentSnapshot();
   }
 
   async pauseExecution() {
@@ -339,12 +464,32 @@ export class AgentEngine {
     await setCurrentRun({
       status: AGENT_RUN_STATUS.PAUSED
     });
-    await this.appendChat(CHAT_MESSAGE_TYPES.TOOL_EVENT, "Paused execution.");
+    const plan = await getDraftPlan();
+    await this.appendWorkflowChat(
+      CHAT_MESSAGE_TYPES.TOOL_EVENT,
+      "Paused execution.",
+      plan || { id: run.planId, title: run.sourceWorkflowTitle || "Workflow" },
+      {
+        sourceWorkflowId: run.sourceWorkflowId || null
+      }
+    );
     return broadcastAgentSnapshot();
   }
 
   async stopExecution() {
     const run = await getCurrentRun();
+    if (run.runId) {
+      await updateSessionRun(run.runId, {
+        status: AGENT_RUN_STATUS.STOPPED,
+        completedAt: Date.now()
+      });
+    }
+    if (run.sourceWorkflowId) {
+      await updateSavedWorkflowMetadata(run.sourceWorkflowId, {
+        lastRunStatus: AGENT_RUN_STATUS.STOPPED,
+        lastRunAt: run.startedAt || Date.now()
+      });
+    }
     await setCurrentRun({
       status: AGENT_RUN_STATUS.STOPPED,
       error: "",
@@ -352,11 +497,16 @@ export class AgentEngine {
       pendingResolution: null,
       completedAt: Date.now()
     });
-    await this.appendChat(
+    const draftPlan = await getDraftPlan();
+    await this.appendWorkflowChat(
       CHAT_MESSAGE_TYPES.TOOL_EVENT,
       run.status === AGENT_RUN_STATUS.COMPLETED
         ? "Workflow is already complete."
-        : "Stopped execution."
+        : "Stopped execution.",
+      draftPlan || { id: run.planId, title: run.sourceWorkflowTitle || "Workflow" },
+      {
+        sourceWorkflowId: run.sourceWorkflowId || null
+      }
     );
     return broadcastAgentSnapshot();
   }
@@ -365,6 +515,11 @@ export class AgentEngine {
     await this.init();
     await clearChatThread();
     await saveDraftPlan(null);
+    await updateUiState({
+      selectedWorkflowId: null,
+      saveWorkflowDraft: null,
+      selectedTab: AGENT_TABS.WORKFLOWS
+    });
     await replaceCurrentRun({
       ...DEFAULT_AGENT_RUN_STATE,
       status: AGENT_RUN_STATUS.IDLE,
@@ -400,9 +555,13 @@ export class AgentEngine {
         pendingResolution: null,
         error: ""
       });
-      await this.appendChat(
+      await this.appendWorkflowChat(
         CHAT_MESSAGE_TYPES.TOOL_EVENT,
-        `Skipped step: ${step?.label || stepId}`
+        `Skipped step: ${step?.label || stepId}`,
+        plan,
+        {
+          sourceWorkflowId: run.sourceWorkflowId || null
+        }
       );
       await broadcastAgentSnapshot();
       this.scheduleProcess();
@@ -416,9 +575,13 @@ export class AgentEngine {
       approvedStepIds: [...new Set([...(run.approvedStepIds || []), stepId])],
       error: ""
     });
-    await this.appendChat(
+    await this.appendWorkflowChat(
       CHAT_MESSAGE_TYPES.TOOL_EVENT,
-      "Approved the pending step. Execution resumed."
+      "Approved the pending step. Execution resumed.",
+      plan,
+      {
+        sourceWorkflowId: run.sourceWorkflowId || null
+      }
     );
     await broadcastAgentSnapshot();
     this.scheduleProcess();
@@ -426,20 +589,77 @@ export class AgentEngine {
   }
 
   async saveWorkflow({ workflowId = null }) {
+    return this.saveWorkflowTemplate({
+      workflowId,
+      templateInputs: null
+    });
+  }
+
+  async updateWorkflowTemplateInputs({ workflowId = null, templateInputs = null }) {
     await this.init();
-    const plan = await getDraftPlan();
-    if (!plan) {
-      throw new Error("There is no plan to save.");
+    const [plan, workflows] = await Promise.all([
+      getDraftPlan(),
+      getSavedWorkflows()
+    ]);
+    const target = (workflowId && plan?.id === workflowId)
+      ? plan
+      : workflows.find((item) => item.id === workflowId) || plan;
+    if (!target) {
+      throw new Error("There is no workflow available for template inputs.");
     }
-    const workflow = {
-      ...plan,
-      id: workflowId || plan.id,
-      savedAt: Date.now()
-    };
+    const saveWorkflowDraft = buildSaveWorkflowDraft(target, templateInputs);
+    await updateUiState({
+      selectedWorkflowId: target.id,
+      saveWorkflowDraft
+    });
+    return broadcastAgentSnapshot();
+  }
+
+  async saveWorkflowTemplate({ workflowId = null, templateInputs = null }) {
+    await this.init();
+    const [plan, workflows, uiState] = await Promise.all([
+      getDraftPlan(),
+      getSavedWorkflows(),
+      getUiState()
+    ]);
+    const target = (workflowId && plan?.id === workflowId)
+      ? plan
+      : workflows.find((item) => item.id === workflowId) || plan;
+    if (!target) {
+      throw new Error("There is no workflow to save.");
+    }
+    const saveDraft = uiState.saveWorkflowDraft?.workflowId === target.id
+      ? uiState.saveWorkflowDraft
+      : buildSaveWorkflowDraft(target, templateInputs);
+    const nextTemplateInputs = templateInputs == null
+      ? (saveDraft.templateInputs || [])
+      : normalizeTemplateInputs(templateInputs, saveDraft.inputCandidates || createTemplateInputCandidates(target));
+    const existing = workflows.find((item) => item.id === target.id) || null;
+    const workflow = normalizeSavedWorkflow({
+      ...(existing || {}),
+      ...target,
+      id: workflowId || target.id,
+      templateInputs: nextTemplateInputs,
+      createdAt: existing?.createdAt || target.createdAt || Date.now(),
+      updatedAt: Date.now(),
+      savedAt: Date.now(),
+      lastRunAt: existing?.lastRunAt || null,
+      lastRunStatus: existing?.lastRunStatus || "",
+      runCount: existing?.runCount || 0
+    });
     await upsertSavedWorkflow(workflow);
-    await this.appendChat(
+    await updateUiState({
+      selectedTab: AGENT_TABS.WORKFLOWS,
+      selectedWorkflowId: workflow.id,
+      saveWorkflowDraft: null
+    });
+    await this.appendWorkflowChat(
       CHAT_MESSAGE_TYPES.TOOL_EVENT,
-      `Saved workflow template: ${workflow.title}`
+      `Saved workflow template: ${workflow.title}`,
+      workflow,
+      {
+        sourceWorkflowId: workflow.id
+      }
     );
     return broadcastAgentSnapshot();
   }
@@ -457,16 +677,108 @@ export class AgentEngine {
       loadedAt: Date.now()
     };
     await saveDraftPlan(loadedPlan);
+    await updateUiState({
+      selectedTab: AGENT_TABS.WORKFLOWS,
+      selectedWorkflowId: loadedPlan.id,
+      saveWorkflowDraft: null
+    });
     await replaceCurrentRun({
       planId: loadedPlan.id,
       status: AGENT_RUN_STATUS.NEEDS_PLAN_APPROVAL,
       error: ""
     });
-    await this.appendChat(
+    await this.appendWorkflowChat(
       CHAT_MESSAGE_TYPES.TOOL_EVENT,
-      `Loaded workflow template: ${loadedPlan.title}`
+      `Loaded workflow template: ${loadedPlan.title}`,
+      loadedPlan,
+      {
+        sourceWorkflowId: workflow.id
+      }
     );
     return broadcastAgentSnapshot();
+  }
+
+  async duplicateWorkflow({ workflowId }) {
+    await this.init();
+    const workflows = await getSavedWorkflows();
+    const workflow = workflows.find((item) => item.id === workflowId);
+    if (!workflow) {
+      throw new Error("Saved workflow not found.");
+    }
+    const duplicated = {
+      ...workflow,
+      id: createId("plan"),
+      title: `${workflow.title} copy`,
+      status: WORKFLOW_PLAN_STATUS.DRAFT,
+      loadedAt: Date.now()
+    };
+    await saveDraftPlan(duplicated);
+    await updateUiState({
+      selectedTab: AGENT_TABS.WORKFLOWS,
+      selectedWorkflowId: duplicated.id,
+      saveWorkflowDraft: null
+    });
+    await replaceCurrentRun({
+      ...DEFAULT_AGENT_RUN_STATE,
+      planId: duplicated.id,
+      status: AGENT_RUN_STATUS.NEEDS_PLAN_APPROVAL
+    });
+    await this.appendWorkflowChat(
+      CHAT_MESSAGE_TYPES.TOOL_EVENT,
+      `Duplicated workflow: ${workflow.title}`,
+      duplicated,
+      {
+        sourceWorkflowId: workflow.id
+      }
+    );
+    return broadcastAgentSnapshot();
+  }
+
+  async deleteWorkflow({ workflowId }) {
+    await this.init();
+    const draftPlan = await getDraftPlan();
+    await deleteSavedWorkflow(workflowId);
+    await updateUiState({
+      selectedWorkflowId: draftPlan?.id === workflowId ? draftPlan.id : null,
+      saveWorkflowDraft: null
+    });
+    return broadcastAgentSnapshot();
+  }
+
+  async prepareWorkflowRun({ workflowId }) {
+    await this.init();
+    await updateUiState({
+      selectedTab: AGENT_TABS.WORKFLOWS,
+      selectedWorkflowId: workflowId
+    });
+    return broadcastAgentSnapshot();
+  }
+
+  async runSavedWorkflow({ workflowId, inputs = {} }) {
+    await this.init();
+    const workflows = await getSavedWorkflows();
+    const workflow = workflows.find((item) => item.id === workflowId);
+    if (!workflow) {
+      throw new Error("Saved workflow not found.");
+    }
+    const runtimePlan = {
+      ...applyTemplateInputsToPlan(workflow, inputs),
+      id: createId("plan"),
+      status: WORKFLOW_PLAN_STATUS.APPROVED,
+      sourceMessageId: workflow.sourceMessageId || null,
+      sourceWorkflowId: workflow.id,
+      generatedFromTemplateAt: Date.now()
+    };
+    await saveDraftPlan(runtimePlan);
+    await updateUiState({
+      selectedTab: AGENT_TABS.WORKFLOWS,
+      selectedWorkflowId: workflow.id,
+      saveWorkflowDraft: null
+    });
+    return this.startWorkflowRun(runtimePlan, {
+      sourceWorkflowId: workflow.id,
+      sourceWorkflowTitle: workflow.title
+    });
   }
 
   async upsertMemory({ preferences = [], notes = [], defaults = {} }) {
@@ -486,23 +798,106 @@ export class AgentEngine {
 
   async recordStepResult(step, result) {
     const run = await getCurrentRun();
-    await updateSessionMemoryForRun(run.planId, {
-      outputs: {
-        ...(run.outputs || {}),
-        ...(step?.outputKey && result.output !== undefined ? { [step.outputKey]: result.output } : {})
+    if (!run.runId) {
+      return;
+    }
+    await appendSessionStepResult(
+      run.runId,
+      {
+        stepId: step?.id || null,
+        label: step?.label || "",
+        status: result.status,
+        output: result.output ?? null,
+        note: result.note || "",
+        timestamp: Date.now()
       },
-      stepResults: [
-        ...((((await getSessionMemory()).runs?.[run.planId]?.stepResults) || [])),
-        {
-          stepId: step?.id || null,
-          label: step?.label || "",
-          status: result.status,
-          output: result.output ?? null,
-          note: result.note || "",
-          timestamp: Date.now()
-        }
-      ]
+      step?.outputKey && result.output !== undefined
+        ? { [step.outputKey]: result.output }
+        : {}
+    );
+  }
+
+  async resetCopilotChat() {
+    await this.init();
+    await resetCopilotConversation();
+    await updateUiState({
+      selectedTab: AGENT_TABS.COPILOT
     });
+    return broadcastAgentSnapshot();
+  }
+
+  async loadCopilotConversation({ conversationId }) {
+    await this.init();
+    const conversation = await loadCopilotConversation(conversationId);
+    if (!conversation) {
+      throw new Error("Copilot conversation not found.");
+    }
+    await updateUiState({
+      selectedTab: AGENT_TABS.COPILOT
+    });
+    return broadcastAgentSnapshot();
+  }
+
+  async deleteCopilotConversation({ conversationId }) {
+    await this.init();
+    await deleteCopilotConversation(conversationId);
+    await updateUiState({
+      selectedTab: AGENT_TABS.COPILOT
+    });
+    return broadcastAgentSnapshot();
+  }
+
+  async chatWithPage({ prompt }) {
+    await this.init();
+    const trimmedPrompt = String(prompt || "").trim();
+    if (!trimmedPrompt) {
+      throw new Error("Ask Copilot something about the current page.");
+    }
+    await appendCopilotMessages([createChatMessage(CHAT_MESSAGE_TYPES.USER_MESSAGE, trimmedPrompt)]);
+    await syncActiveCopilotConversation({
+      titleHint: trimmedPrompt
+    });
+    await updateUiState({
+      selectedTab: AGENT_TABS.COPILOT
+    });
+    try {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      const activeTab = tabs[0] || null;
+      if (!activeTab?.id) {
+        throw new Error("Open a browser tab before using Copilot.");
+      }
+      const inspectResult = await this.executePageStep(activeTab.id, "inspect_page", {}, 5000);
+      if (!inspectResult?.ok) {
+        throw new Error(inspectResult?.error || "Could not read the current page.");
+      }
+      const [settings, copilotThread] = await Promise.all([
+        getSettings(),
+        getCopilotThread()
+      ]);
+      const response = await this.hooks.chatWithPageImpl({
+        settings,
+        prompt: trimmedPrompt,
+        pageSnapshot: inspectResult.output,
+        conversation: copilotThread
+      });
+      await this.appendCopilotChat(
+        CHAT_MESSAGE_TYPES.FINAL_RESULT,
+        response.answer,
+        {
+          pageTitle: inspectResult.output?.title || ""
+        }
+      );
+      await syncActiveCopilotConversation({
+        titleHint: trimmedPrompt
+      });
+      return broadcastAgentSnapshot();
+    } catch (error) {
+      await this.appendCopilotChat(CHAT_MESSAGE_TYPES.ERROR_EVENT, error.message);
+      await syncActiveCopilotConversation({
+        titleHint: trimmedPrompt
+      });
+      return broadcastAgentSnapshot();
+    }
   }
 
   async resolveStep(step, outputs) {
@@ -626,12 +1021,14 @@ export class AgentEngine {
             message: resolvedStep.args.question || resolvedStep.label
           }
         });
-        await this.appendChat(
+        await this.appendWorkflowChat(
           CHAT_MESSAGE_TYPES.APPROVAL_REQUEST,
           resolvedStep.args.question || resolvedStep.label,
+          plan,
           {
             stepId: resolvedStep.id,
-            mode: "ask_user"
+            mode: "ask_user",
+            sourceWorkflowId: runState.sourceWorkflowId || null
           }
         );
         return { status: "paused" };
@@ -718,12 +1115,14 @@ export class AgentEngine {
           message: nextError
         }
       });
-      await this.appendChat(
+      await this.appendWorkflowChat(
         CHAT_MESSAGE_TYPES.ERROR_EVENT,
         `Step failed after retry and repair: ${step.label}. Edit the step, skip it, or stop the run.`,
+        plan,
         {
           stepId: step.id,
-          error: nextError
+          error: nextError,
+          sourceWorkflowId: runState.sourceWorkflowId || null
         }
       );
       return { status: "paused" };
@@ -752,7 +1151,7 @@ export class AgentEngine {
   async completeRun(plan, runState) {
     const settings = await getSettings();
     const sessionMemory = await getSessionMemory();
-    const runMemory = sessionMemory.runs?.[plan.id] || {};
+    const runMemory = sessionMemory.runs?.[runState.runId] || {};
     const summaryResponse = await this.hooks.summarizeRunImpl({
       settings,
       plan,
@@ -760,6 +1159,19 @@ export class AgentEngine {
       runState,
       runMemory
     });
+    if (runState.runId) {
+      await updateSessionRun(runState.runId, {
+        status: AGENT_RUN_STATUS.COMPLETED,
+        completedAt: Date.now(),
+        summary: summaryResponse.summary || ""
+      });
+    }
+    if (runState.sourceWorkflowId) {
+      await updateSavedWorkflowMetadata(runState.sourceWorkflowId, {
+        lastRunStatus: AGENT_RUN_STATUS.COMPLETED,
+        lastRunAt: runState.startedAt || Date.now()
+      });
+    }
     await setCurrentRun({
       status: AGENT_RUN_STATUS.COMPLETED,
       completedAt: Date.now(),
@@ -769,7 +1181,14 @@ export class AgentEngine {
       pendingResolution: null
     });
     await appendChatMessages([
-      buildFinalResultMessage(summaryResponse.summary || "Workflow completed.")
+      buildFinalResultMessage(
+        summaryResponse.summary || "Workflow completed.",
+        buildWorkflowMessageData({
+          planId: plan.id,
+          sourceWorkflowId: runState.sourceWorkflowId || null,
+          title: plan.title
+        })
+      )
     ]);
     return broadcastAgentSnapshot();
   }
@@ -809,21 +1228,27 @@ export class AgentEngine {
             stepId: step.id
           }
         });
-        await this.appendChat(
+        await this.appendWorkflowChat(
           CHAT_MESSAGE_TYPES.APPROVAL_REQUEST,
           `Approval required before "${step.label}".`,
+          plan,
           {
             stepId: step.id,
-            mode: "risky_step"
+            mode: "risky_step",
+            sourceWorkflowId: runState.sourceWorkflowId || null
           }
         );
         await broadcastAgentSnapshot();
         return;
       }
 
-      await this.appendChat(
+      await this.appendWorkflowChat(
         CHAT_MESSAGE_TYPES.TOOL_EVENT,
-        `Running step ${runState.currentStepIndex + 1}/${plan.steps.length}: ${step.label}`
+        `Running step ${runState.currentStepIndex + 1}/${plan.steps.length}: ${step.label}`,
+        plan,
+        {
+          sourceWorkflowId: runState.sourceWorkflowId || null
+        }
       );
       const result = await this.executeWithRecovery(step, runState, plan);
       if (result.status === "paused") {
@@ -855,24 +1280,47 @@ export class AgentEngine {
           outputPreview: truncateText(result.output)
         }
       });
-      await this.appendChat(
+      await this.appendWorkflowChat(
         CHAT_MESSAGE_TYPES.STEP_RESULT,
         `${executedStep.label} completed.`,
+        plan,
         {
           stepId: executedStep.id,
-          outputPreview: truncateText(result.output)
+          outputPreview: truncateText(result.output),
+          sourceWorkflowId: runState.sourceWorkflowId || null
         }
       );
       await broadcastAgentSnapshot();
       this.scheduleProcess();
     } catch (error) {
+      const currentRun = await getCurrentRun();
+      if (currentRun.runId) {
+        await updateSessionRun(currentRun.runId, {
+          status: AGENT_RUN_STATUS.ERROR,
+          completedAt: Date.now(),
+          summary: error.message
+        });
+      }
+      if (currentRun.sourceWorkflowId) {
+        await updateSavedWorkflowMetadata(currentRun.sourceWorkflowId, {
+          lastRunStatus: AGENT_RUN_STATUS.ERROR,
+          lastRunAt: currentRun.startedAt || Date.now()
+        });
+      }
       await setCurrentRun({
         status: AGENT_RUN_STATUS.ERROR,
         error: error.message,
         pendingResolution: null,
         awaitingApprovalStepId: null
       });
-      await this.appendChat(CHAT_MESSAGE_TYPES.ERROR_EVENT, error.message);
+      await this.appendWorkflowChat(
+        CHAT_MESSAGE_TYPES.ERROR_EVENT,
+        error.message,
+        (await getDraftPlan()) || { id: currentRun.planId, title: currentRun.sourceWorkflowTitle || "Workflow" },
+        {
+          sourceWorkflowId: currentRun.sourceWorkflowId || null
+        }
+      );
       await broadcastAgentSnapshot();
     } finally {
       this.processing = false;

@@ -375,6 +375,31 @@ function buildSummaryPrompt({ plan, outputs, runState, step, runMemory }) {
   return { systemPrompt, userPrompt };
 }
 
+function buildCopilotPrompt({ prompt, pageSnapshot, conversation = [] }) {
+  const systemPrompt = [
+    "You are a browser page copilot.",
+    "Answer only from the visible page context and the conversation history.",
+    "Be concise, concrete, and useful.",
+    "If the page context is insufficient, say what is missing instead of guessing.",
+    "Do not output JSON."
+  ].join(" ");
+
+  const userPrompt = [
+    "Current page context:",
+    JSON.stringify({
+      url: pageSnapshot?.url || "",
+      title: pageSnapshot?.title || "",
+      textSample: pageSnapshot?.textSample || ""
+    }, null, 2),
+    "Recent conversation:",
+    JSON.stringify(conversation.slice(-6), null, 2),
+    `User request: ${prompt}`,
+    "Respond in plain text."
+  ].join("\n");
+
+  return { systemPrompt, userPrompt };
+}
+
 export async function planWorkflow({ goal, sourceMessageId, settings, memoryContext, starterPrompts = [] }) {
   const prompts = buildPlanPrompt({
     goal,
@@ -423,6 +448,30 @@ export async function summarizeRun({ settings, plan, outputs, runState = null, s
   });
   return {
     summary: String(parsed?.summary || "").trim() || "Workflow completed."
+  };
+}
+
+export async function chatWithPage({ settings, prompt, pageSnapshot, conversation = [] }) {
+  const config = resolveProviderConfig(settings);
+  if (!config.apiKey) {
+    throw new Error(`Add your ${config.label} API key before using Copilot.`);
+  }
+  const prompts = buildCopilotPrompt({
+    prompt,
+    pageSnapshot,
+    conversation
+  });
+  const outputText = await callProvider({
+    config,
+    systemPrompt: prompts.systemPrompt,
+    userPrompt: prompts.userPrompt
+  });
+  const answer = String(outputText || "").trim();
+  if (!answer) {
+    throw new Error(`${config.label} returned an empty page-copilot response.`);
+  }
+  return {
+    answer
   };
 }
 

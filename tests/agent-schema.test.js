@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyTemplateInputsToPlan,
   buildPlannerMemoryContext,
+  createTemplateInputCandidates,
   extractRequiredOrigins,
   isRiskyStep,
+  normalizeTemplateInputs,
   resolveTemplateVariables,
   validateWorkflowPlan
 } from "../src/shared/agent.js";
@@ -107,4 +110,57 @@ test("extractRequiredOrigins and isRiskyStep stay bounded", () => {
 
   assert.deepEqual(extractRequiredOrigins(steps), ["https://news.ycombinator.com/*"]);
   assert.equal(isRiskyStep(steps[1]), true);
+});
+
+test("template input helpers extract and inject reusable workflow values", () => {
+  const plan = validateWorkflowPlan({
+    goal: "Research a company",
+    title: "Company recon",
+    steps: [
+      {
+        id: "step-1",
+        kind: "open_url",
+        label: "Open company page",
+        args: {
+          url: "https://example.com"
+        }
+      },
+      {
+        id: "step-2",
+        kind: "type",
+        label: "Search for topic",
+        args: {
+          text: "AI agents"
+        }
+      }
+    ]
+  });
+
+  const candidates = createTemplateInputCandidates(plan);
+  const inputs = normalizeTemplateInputs([
+    {
+      id: "step-1:url",
+      key: "start_url",
+      label: "Start URL",
+      defaultValue: "https://example.com"
+    },
+    {
+      id: "step-2:text",
+      key: "topic",
+      label: "Topic",
+      defaultValue: "AI agents"
+    }
+  ], candidates);
+
+  const resolved = applyTemplateInputsToPlan({
+    ...plan,
+    templateInputs: inputs
+  }, {
+    start_url: "https://openai.com",
+    topic: "workflow automation"
+  });
+
+  assert.equal(inputs.length, 2);
+  assert.equal(resolved.steps[0].args.url, "https://openai.com");
+  assert.equal(resolved.steps[1].args.text, "workflow automation");
 });

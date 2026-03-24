@@ -9,6 +9,14 @@ import {
 import { createId } from "./utils.js";
 
 const RISKY_ACTION_PATTERN = /\b(submit|publish|post|send|delete|remove|purchase|buy|checkout|confirm|save changes|place order|logout|sign out|disconnect|disable|close account)\b/i;
+const TEMPLATE_INPUT_BLOCKLIST = new Set([
+  "selector",
+  "role",
+  "label",
+  "placeholder",
+  "purpose",
+  "description"
+]);
 
 function toText(value) {
   if (typeof value === "string") {
@@ -35,6 +43,10 @@ function normalizeKey(value, fallback = "") {
     .replace(/^_+|_+$/g, "");
 }
 
+function clone(value) {
+  return value ? JSON.parse(JSON.stringify(value)) : value;
+}
+
 function normalizeOrigin(origin) {
   try {
     const parsed = new URL(origin);
@@ -54,6 +66,101 @@ export function createChatMessage(type, content, data = {}) {
     content: String(content || "").trim(),
     data,
     timestamp: Date.now()
+  };
+}
+
+export function createTemplateInputCandidates(plan = {}) {
+  const candidates = [];
+  for (const step of Array.isArray(plan.steps) ? plan.steps : []) {
+    const args = step?.args && typeof step.args === "object" ? step.args : {};
+    for (const [argKey, argValue] of Object.entries(args)) {
+      if (TEMPLATE_INPUT_BLOCKLIST.has(argKey)) {
+        continue;
+      }
+      if (typeof argValue !== "string" || !argValue.trim()) {
+        continue;
+      }
+      candidates.push({
+        id: `${step.id}:${argKey}`,
+        stepId: step.id,
+        stepLabel: step.label,
+        argKey,
+        value: argValue,
+        label: `${step.label} · ${argKey.replace(/_/g, " ")}`,
+        suggestedKey: normalizeKey(argKey, `${step.kind}_${argKey}`) || argKey
+      });
+    }
+  }
+  return candidates;
+}
+
+export function normalizeTemplateInputs(inputs = [], candidates = []) {
+  const candidateMap = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const seenKeys = new Set();
+  const normalized = [];
+  for (const input of Array.isArray(inputs) ? inputs : []) {
+    const candidate = candidateMap.get(String(input?.id || "").trim());
+    if (!candidate) {
+      continue;
+    }
+    const key = normalizeKey(input.key || candidate.suggestedKey, candidate.suggestedKey);
+    if (!key || seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    normalized.push({
+      id: candidate.id,
+      key,
+      label: String(input.label || candidate.label).trim() || candidate.label,
+      defaultValue: String(input.defaultValue ?? candidate.value).trim(),
+      stepId: candidate.stepId,
+      argKey: candidate.argKey
+    });
+  }
+  return normalized;
+}
+
+export function applyTemplateInputsToPlan(plan = {}, values = {}) {
+  const nextPlan = clone(plan) || {};
+  const steps = Array.isArray(nextPlan.steps) ? nextPlan.steps : [];
+  const templateInputs = Array.isArray(nextPlan.templateInputs) ? nextPlan.templateInputs : [];
+  for (const input of templateInputs) {
+    const step = steps.find((item) => item.id === input.stepId);
+    if (!step || !step.args || typeof step.args !== "object") {
+      continue;
+    }
+    const nextValue = values[input.key];
+    if (nextValue == null) {
+      step.args[input.argKey] = input.defaultValue;
+      continue;
+    }
+    step.args[input.argKey] = String(nextValue);
+  }
+  return nextPlan;
+}
+
+export function normalizeSavedWorkflow(workflow = {}) {
+  const plan = validateWorkflowPlan({
+    ...workflow,
+    createdAt: workflow.createdAt,
+    sourceMessageId: workflow.sourceMessageId
+  });
+  return {
+    ...plan,
+    templateInputs: Array.isArray(workflow.templateInputs) ? workflow.templateInputs.map((input) => ({
+      id: String(input.id || "").trim(),
+      key: normalizeKey(input.key, input.id),
+      label: String(input.label || input.key || "Input").trim(),
+      defaultValue: String(input.defaultValue || "").trim(),
+      stepId: String(input.stepId || "").trim(),
+      argKey: String(input.argKey || "").trim()
+    })).filter((input) => input.id && input.key && input.stepId && input.argKey) : [],
+    createdAt: Number(workflow.createdAt) || Number(plan.createdAt) || Date.now(),
+    updatedAt: Number(workflow.updatedAt) || Number(workflow.savedAt) || Date.now(),
+    savedAt: Number(workflow.savedAt) || Number(workflow.updatedAt) || Date.now(),
+    lastRunAt: Number(workflow.lastRunAt) || null,
+    lastRunStatus: String(workflow.lastRunStatus || "").trim(),
+    runCount: Math.max(0, Number(workflow.runCount) || 0)
   };
 }
 
@@ -335,6 +442,6 @@ export function validateWorkflowPlan(rawPlan) {
   return normalized.plan;
 }
 
-export function buildFinalResultMessage(summary) {
-  return createChatMessage(CHAT_MESSAGE_TYPES.FINAL_RESULT, summary);
+export function buildFinalResultMessage(summary, data = {}) {
+  return createChatMessage(CHAT_MESSAGE_TYPES.FINAL_RESULT, summary, data);
 }

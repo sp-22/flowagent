@@ -7,31 +7,45 @@
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
-    <main class="workspace">
+    <main class="app-shell">
       <header class="topbar">
-        <div class="topbar-group">
-          <button id="new-chat" class="icon-button ghost" type="button" aria-label="New chat">+</button>
-          <select id="account-select" class="control-select" aria-label="Provider account"></select>
-          <select id="model-select" class="control-select" aria-label="Model selection"></select>
+        <div class="topbar-main">
+          <div class="brand">FlowAgent</div>
+          <div class="segmented-tabs" role="tablist" aria-label="FlowAgent views">
+            <button id="tab-workflows" class="tab-button active" type="button" role="tab" aria-selected="true">Workflows</button>
+            <button id="tab-copilot" class="tab-button" type="button" role="tab" aria-selected="false">Copilot</button>
+          </div>
         </div>
-        <div class="topbar-group right">
-          <span id="run-pill" class="status-pill muted">Idle</span>
-          <button id="memory-window" class="icon-button ghost" type="button">Memory</button>
-          <button id="keys-button" class="icon-button ghost" type="button">Keys</button>
+
+        <div class="topbar-actions">
+          <button id="model-pill" class="model-pill" type="button" aria-label="Active model"></button>
+          <button id="utility-toggle" class="icon-button" type="button" aria-label="Open utility menu">...</button>
+        </div>
+
+        <div id="utility-menu" class="utility-menu" hidden>
+          <div class="utility-copy">
+            <p id="utility-state" class="utility-state">No active provider</p>
+          </div>
+
+          <label class="utility-field">
+            <span>Account</span>
+            <select id="account-select" class="chrome-select" aria-label="Provider account"></select>
+          </label>
+
+          <label class="utility-field">
+            <span>Model</span>
+            <select id="model-select" class="chrome-select" aria-label="Model selection"></select>
+          </label>
+
+          <div class="utility-actions">
+            <button id="keys-button" class="chrome-button" type="button">Manage Keys</button>
+            <button id="memory-window" class="chrome-button" type="button">Open Memory</button>
+          </div>
         </div>
       </header>
 
-      <section id="thread" class="thread" aria-live="polite"></section>
-
-      <footer class="composer-shell">
-        <div id="composer-hint" class="composer-hint">Describe a browser task to start planning.</div>
-        <div class="composer">
-          <textarea id="prompt-input" rows="2" placeholder="Ask the agent to browse, compare, collect, or fill a web workflow."></textarea>
-          <div class="composer-actions">
-            <button id="send-prompt" class="primary" type="button">Send</button>
-          </div>
-        </div>
-      </footer>
+      <section id="workflows-pane" class="pane" aria-live="polite"></section>
+      <section id="copilot-pane" class="pane" aria-live="polite" hidden></section>
 
       <div id="account-sheet" class="sheet-backdrop" hidden>
         <section class="sheet">
@@ -40,13 +54,13 @@
               <p class="eyebrow">Provider Accounts</p>
               <h2>Manage local keys</h2>
             </div>
-            <button id="close-sheet" class="icon-button ghost" type="button" aria-label="Close">Done</button>
+            <button id="close-sheet" class="chrome-button" type="button" aria-label="Close">Done</button>
           </div>
 
           <div id="account-list" class="account-list"></div>
 
           <form id="account-form" class="account-form">
-            <div class="field-row">
+            <div class="field-grid">
               <label class="field">
                 <span>Provider</span>
                 <select id="account-provider">
@@ -72,7 +86,7 @@
               <input id="account-base-url" type="text" placeholder="Optional override" />
             </label>
 
-            <div class="field-row">
+            <div class="field-grid">
               <label class="field">
                 <span>Max output tokens</span>
                 <input id="settings-max-output-tokens" type="number" min="64" step="1" />
@@ -84,8 +98,8 @@
             </div>
 
             <div class="sheet-actions">
-              <button id="save-account" class="primary" type="submit">Save account</button>
-              <button id="refresh-models" class="ghost" type="button">Refresh models</button>
+              <button id="save-account" class="primary-button" type="submit">Save account</button>
+              <button id="refresh-models" class="chrome-button" type="button">Refresh models</button>
               <span id="sheet-status" class="status-pill muted">Ready</span>
             </div>
           </form>

@@ -47,8 +47,8 @@ function renderSnapshot(snapshot) {
 
   elements.memoryStatus.textContent = `${preferences.length + notes.length} notes`;
   elements.heroCopy.textContent = workflows.length
-    ? `The agent currently has ${workflows.length} saved workflow${workflows.length > 1 ? "s" : ""} and ${Object.keys(domains).length} domain memories.`
-    : "The agent remembers user notes, selectors, and saved workflows here.";
+    ? `FlowAgent currently has ${workflows.length} saved workflow${workflows.length > 1 ? "s" : ""}, ${snapshot.recentRuns?.length || 0} recent runs, and ${Object.keys(domains).length} domain memories.`
+    : "FlowAgent remembers user notes, selectors, and saved workflows here.";
 
   elements.userMemory.innerHTML = "";
   if (!preferences.length && !notes.length) {
@@ -66,10 +66,14 @@ function renderSnapshot(snapshot) {
     elements.savedWorkflows.append(createCard("No workflows yet", "Save a workflow from the chat panel after you approve it."));
   } else {
     for (const workflow of workflows) {
+      const templateInputs = (workflow.templateInputs || []).map((input) => `Input: ${input.label} -> ${input.key} (default ${input.defaultValue || "empty"})`);
       elements.savedWorkflows.append(createCard(
         workflow.title || "Untitled workflow",
-        workflow.summary || workflow.goal || "Saved workflow",
-        (workflow.steps || []).slice(0, 6).map((step, index) => `${index + 1}. ${step.label} (${step.kind})`)
+        `${workflow.summary || workflow.goal || "Saved workflow"} · ${workflow.runCount || 0} runs · ${workflow.lastRunAt ? `last run ${new Date(workflow.lastRunAt).toLocaleString()}` : "never run"}`,
+        [
+          ...(workflow.steps || []).slice(0, 6).map((step, index) => `${index + 1}. ${step.label} (${step.kind})`),
+          ...templateInputs
+        ]
       ));
     }
   }

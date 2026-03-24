@@ -33,9 +33,41 @@ async function handleMessage(message) {
     case MESSAGE_TYPES.AGENT_STATUS_UPDATE:
       return createSuccessResponse();
 
+    case MESSAGE_TYPES.SELECT_AGENT_TAB:
+      await agentEngine.selectAgentTab(message.payload?.tab || "");
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.SELECT_WORKFLOW:
+      await agentEngine.selectWorkflow({
+        workflowId: message.payload?.workflowId || null
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
     case MESSAGE_TYPES.PLAN_FROM_CHAT:
       await agentEngine.planFromChat({
         goal: message.payload?.goal || ""
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.CHAT_WITH_PAGE:
+      await agentEngine.chatWithPage({
+        prompt: message.payload?.prompt || ""
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.RESET_COPILOT_CHAT:
+      await agentEngine.resetCopilotChat();
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.LOAD_COPILOT_CONVERSATION:
+      await agentEngine.loadCopilotConversation({
+        conversationId: message.payload?.conversationId || ""
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.DELETE_COPILOT_CONVERSATION:
+      await agentEngine.deleteCopilotConversation({
+        conversationId: message.payload?.conversationId || ""
       });
       return createSuccessResponse({ snapshot: await getAgentSnapshot() });
 
@@ -82,9 +114,48 @@ async function handleMessage(message) {
       });
       return createSuccessResponse({ snapshot: await getAgentSnapshot() });
 
+    case MESSAGE_TYPES.SAVE_WORKFLOW_TEMPLATE:
+      await agentEngine.saveWorkflowTemplate({
+        workflowId: message.payload?.workflowId || null,
+        templateInputs: message.payload?.templateInputs || null
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
     case MESSAGE_TYPES.LOAD_WORKFLOW:
       await agentEngine.loadWorkflow({
         workflowId: message.payload?.workflowId || ""
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.DELETE_WORKFLOW:
+      await agentEngine.deleteWorkflow({
+        workflowId: message.payload?.workflowId || ""
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.DUPLICATE_WORKFLOW:
+      await agentEngine.duplicateWorkflow({
+        workflowId: message.payload?.workflowId || ""
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.PREPARE_WORKFLOW_RUN:
+      await agentEngine.prepareWorkflowRun({
+        workflowId: message.payload?.workflowId || ""
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.RUN_SAVED_WORKFLOW:
+      await agentEngine.runSavedWorkflow({
+        workflowId: message.payload?.workflowId || "",
+        inputs: message.payload?.inputs || {}
+      });
+      return createSuccessResponse({ snapshot: await getAgentSnapshot() });
+
+    case MESSAGE_TYPES.UPDATE_WORKFLOW_TEMPLATE_INPUTS:
+      await agentEngine.updateWorkflowTemplateInputs({
+        workflowId: message.payload?.workflowId || null,
+        templateInputs: message.payload?.templateInputs || null
       });
       return createSuccessResponse({ snapshot: await getAgentSnapshot() });
 
